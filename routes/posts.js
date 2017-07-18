@@ -1,8 +1,9 @@
 var express = require('express');
 var router = express.Router();
 
-var PostModel = require('../models/posts');
-var CommentModel = require('../models/comments');
+
+var Post = require('../lib/mongo').Post;
+var Comment = require('../lib/mongo').Comment;
 var checkLogin = require('../middlewares/check').checkLogin;
 
 // GET /posts 所有用户或者特定用户的文章页
@@ -10,13 +11,22 @@ var checkLogin = require('../middlewares/check').checkLogin;
 router.get('/', function (req, res, next) {
     var author = req.query.author;
 
-    PostModel.getPosts(author)
+    var query = {};
+    if (author) {
+        query.author = author;
+    }
+    Post.find(query)
+        .populate({path: 'author', model: 'User'})
+        .sort({_id: -1})
+        .exec()
         .then(function (posts) {
             res.render('posts', {
                 posts: posts
             });
         })
         .catch(next);
+
+
 });
 
 // GET /posts/create 发表文章页
@@ -50,10 +60,10 @@ router.post('/', checkLogin, function (req, res, next) {
         pv: 0
     };
 
-    PostModel.create(post)
-        .then(function (result) {
+    Post.create(post)
+        .then(function (post) {
             // 此 post 是插入 mongodb 后的值，包含 _id
-            post = result.ops[0];
+
             req.flash('success', '发表成功');
             // 发表成功后跳转到该文章页
             res.redirect(`/posts/${post._id}`);
@@ -66,9 +76,17 @@ router.get('/:postId', function (req, res, next) {
     var postId = req.params.postId;
 
     Promise.all([
-        PostModel.getPostById(postId),// 获取文章信息
-        CommentModel.getComments(postId),// 获取该文章所有留言
-        PostModel.incPv(postId)// pv 加 1
+        Post.findOne({_id: postId})
+            .populate({path: 'author', model: 'User'})
+            .exec(),// 获取文章信息
+        Comment
+            .find({postId: postId})
+            .populate({path: 'author', model: 'User'})
+            .sort({_id: -1})
+            .exec(),// 获取该文章所有留言
+        Post
+            .update({_id: postId}, {$inc: {pv: 1}})
+            .exec()// pv 加 1
     ])
         .then(function (result) {
             var post = result[0];
@@ -90,7 +108,10 @@ router.get('/:postId/edit', checkLogin, function (req, res, next) {
     var postId = req.params.postId;
     var author = req.session.user._id;
 
-    PostModel.getRawPostById(postId)
+    Post
+        .findOne({_id: postId})
+        .populate({path: 'author', model: 'User'})
+        .exec()
         .then(function (post) {
             if (!post) {
                 throw new Error('该文章不存在');
@@ -111,7 +132,8 @@ router.post('/:postId/edit', checkLogin, function (req, res, next) {
     var author = req.session.user._id;
     var title = req.fields.title;
     var content = req.fields.content;
-    PostModel.updatePostById(postId, author, {title: title, content: content})
+    Post.update({author: author, _id: postId}, {$set: {title: title, content: content}})
+        .exec()
         .then(function () {
             req.flash('success', '编辑文章成功');
             // 编辑成功后跳转到上一页
@@ -125,8 +147,13 @@ router.get('/:postId/remove', checkLogin, function (req, res, next) {
     var postId = req.params.postId;
     var author = req.session.user._id;
 
-    PostModel.delPostById(postId, author)
-        .then(function () {
+    Post.remove({author: author, _id: postId})
+        .exec()
+        .then(function (result) {
+            // 文章删除后，再删除该文章下的所有留言
+            if (result.result.ok && result.result.n > 0) {
+                Comment.remove({postId: postId}).exec();
+            }
             req.flash('success', '删除文章成功');
             // 删除成功后跳转到主页
             res.redirect('/posts');
@@ -145,7 +172,7 @@ router.post('/:postId/comment', checkLogin, function (req, res, next) {
         content: content
     };
 
-    CommentModel.create(comment)
+    Comment.create(comment)
         .then(function () {
             req.flash('success', '留言成功');
             // 留言成功后跳转到上一页
@@ -159,7 +186,9 @@ router.get('/:postId/comment/:commentId/remove', checkLogin, function (req, res,
     var commentId = req.params.commentId;
     var author = req.session.user._id;
 
-    CommentModel.delCommentById(commentId, author)
+    Comment
+        .remove({author: author, _id: commentId})
+        .exec()
         .then(function () {
             req.flash('success', '删除留言成功');
             // 删除成功后跳转到上一页

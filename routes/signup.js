@@ -4,7 +4,7 @@ var sha1 = require('sha1');
 var express = require('express');
 var router = express.Router();
 
-var UserModel = require('../models/users');
+var User = require('../lib/mongo').User;
 var checkNotLogin = require('../middlewares/check').checkNotLogin;
 
 // GET /signup 注册页
@@ -60,10 +60,10 @@ router.post('/', checkNotLogin, function(req, res, next) {
     avatar: avatar
   };
   // 用户信息写入数据库
-  UserModel.create(user)
+  User.create(user)
     .then(function (result) {
       // 此 user 是插入 mongodb 后的值，包含 _id
-      user = result.ops[0];
+      user = result;
       // 将用户信息存入 session
       delete user.password;
       req.session.user = user;
